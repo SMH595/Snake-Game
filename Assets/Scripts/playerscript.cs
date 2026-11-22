@@ -32,6 +32,7 @@ public class playerscript : MonoBehaviour
     [SerializeField] private float coinSoundDuration = 2f;
 
     private Rigidbody rb;
+    private Collider playerCollider;
     private Vector3 movementDirection = Vector3.forward;
     private Camera mainCamera;
     private int livesRemaining = StartingLives;
@@ -48,6 +49,7 @@ public class playerscript : MonoBehaviour
     void Awake()
     {
         rb = GetComponent<Rigidbody>();
+        playerCollider = GetComponent<Collider>();
         rb.constraints &= ~RigidbodyConstraints.FreezeRotation;
         rb.constraints |= RigidbodyConstraints.FreezeRotationX |
                           RigidbodyConstraints.FreezeRotationZ |
@@ -301,6 +303,35 @@ public class playerscript : MonoBehaviour
 
         rb.MovePosition(nextPosition);
         FollowPrevious(nextPosition);
+        CheckSelfCollision(nextPosition);
+    }
+
+    private void CheckSelfCollision(Vector3 headPosition)
+    {
+        if (bodySegments.Count < 2)
+            return;
+
+        Vector3 headHalfExtents = playerCollider != null
+            ? playerCollider.bounds.extents
+            : Vector3.one * 0.5f;
+
+        // The first segment follows directly behind the head and is not a self-collision.
+        for (int i = 1; i < bodySegments.Count; i++)
+        {
+            Transform segment = bodySegments[i];
+            if (segment == null)
+                continue;
+
+            Vector3 segmentHalfExtents = segment.lossyScale * 0.5f;
+            Vector3 separation = headPosition - segment.position;
+            if (Mathf.Abs(separation.x) <= headHalfExtents.x + segmentHalfExtents.x &&
+                Mathf.Abs(separation.y) <= headHalfExtents.y + segmentHalfExtents.y &&
+                Mathf.Abs(separation.z) <= headHalfExtents.z + segmentHalfExtents.z)
+            {
+                LoseLife();
+                return;
+            }
+        }
     }
 
     private void AddBodySegment()
