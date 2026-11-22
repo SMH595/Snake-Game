@@ -1,4 +1,3 @@
-
 using UnityEngine;
 using UnityEngine.InputSystem;
 using System.Collections.Generic;
@@ -9,22 +8,31 @@ public class playerscript : MonoBehaviour
     private const int StartingLives = 3;
     private const float SegmentSpacing = 0.9f;
 
+    [Header("Movement")]
     public float speed = 5f;
     [SerializeField] private float segmentFollowSpeed = 8f;
+    [SerializeField] private float turnSpeed = 540f;
+    [SerializeField] private float segmentTurnSpeed = 12f;
     [SerializeField] private float segmentSize = 0.8f;
     [SerializeField] private float hazardInvulnerability = 1f;
     [SerializeField] private float minX = -9f;
     [SerializeField] private float maxX = 9f;
     [SerializeField] private float minZ = -9f;
     [SerializeField] private float maxZ = 9f;
+
+    [Header("Camera")]
     [SerializeField] private Vector3 cameraOffset = new Vector3(0f, 8f, -10f);
     [SerializeField] private Vector3 cameraLookOffset = new Vector3(0f, 0f, 2f);
 
+    [Header("UI")]
     [SerializeField] private CoinCollectedUI coinCollectedUI;
 
+    [Header("Audio")]
+    [SerializeField] private AudioClip coinSound;
+    [SerializeField] private float coinSoundDuration = 2f;
+
     private Rigidbody rb;
-    private float horizontalInput;
-    private float verticalInput;
+    private Vector3 movementDirection = Vector3.forward;
     private Camera mainCamera;
     private int livesRemaining = StartingLives;
     private readonly List<Transform> bodySegments = new List<Transform>();
@@ -32,11 +40,19 @@ public class playerscript : MonoBehaviour
     private float invulnerabilityRemaining;
     private bool gameOver;
 
+    private AudioSource audioSource;
+    private AudioClip trimmedCoinSound;
+
+    public IReadOnlyList<Transform> BodySegments => bodySegments;
+
     void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        rb.constraints |= RigidbodyConstraints.FreezeRotation |
+        rb.constraints &= ~RigidbodyConstraints.FreezeRotation;
+        rb.constraints |= RigidbodyConstraints.FreezeRotationX |
+                          RigidbodyConstraints.FreezeRotationZ |
                           RigidbodyConstraints.FreezePositionY;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
         rb.useGravity = false;
         startingPosition = transform.position;
         startingPosition.y = 0.5f;
@@ -52,6 +68,58 @@ public class playerscript : MonoBehaviour
             coinCollectedUI.SetLives(livesRemaining);
             coinCollectedUI.SetLength(1);
         }
+
+        // Setup AudioSource
+        audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+            audioSource = gameObject.AddComponent<AudioSource>();
+
+        audioSource.playOnAwake = false;
+        audioSource.spatialBlend = 0f; // 2D sound for consistent volume
+
+#if UNITY_EDITOR
+        if (coinSound == null)
+        {
+            coinSound = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioClip>("Assets/Audio/CoinCollect.mp3");
+        }
+#endif
+
+        PrepareTrimmedSound();
+
+        MiniMapUI miniMap = GetComponent<MiniMapUI>();
+        if (miniMap == null)
+            miniMap = gameObject.AddComponent<MiniMapUI>();
+        miniMap.Initialize(this, minX, maxX, minZ, maxZ);
+    }
+
+    private void PrepareTrimmedSound()
+    {
+        if (coinSound == null)
+            return;
+
+        // If clip is longer than coinSoundDuration, create a 2-second subclip in memory
+        if (coinSound.length > coinSoundDuration + 0.1f)
+        {
+            try
+            {
+                int sampleCount = Mathf.Min((int)(coinSound.frequency * coinSoundDuration), coinSound.samples);
+                int totalElements = sampleCount * coinSound.channels;
+                float[] data = new float[totalElements];
+                if (coinSound.GetData(data, 0))
+                {
+                    trimmedCoinSound = AudioClip.Create("Coin_Trimmed_2s", sampleCount, coinSound.channels, coinSound.frequency, false);
+                    trimmedCoinSound.SetData(data, 0);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning("Could not create trimmed clip in memory: " + ex.Message);
+            }
+        }
+        else
+        {
+            trimmedCoinSound = coinSound;
+        }
     }
 
     public void CollectCoin()
@@ -61,7 +129,43 @@ public class playerscript : MonoBehaviour
 
         if (coinCollectedUI != null)
             coinCollectedUI.AddCoin();
+
         AddBodySegment();
+        PlayCoinSound();
+    }
+
+    private void PlayCoinSound()
+    {
+        if (audioSource == null)
+            audioSource = GetComponent<AudioSource>();
+
+        if (audioSource == null)
+            return;
+
+        AudioClip clipToPlay = trimmedCoinSound != null ? trimmedCoinSound : coinSound;
+        if (clipToPlay == null)
+            return;
+
+        if (trimmedCoinSound != null)
+        {
+            audioSource.PlayOneShot(trimmedCoinSound);
+        }
+        else
+        {
+            // Direct playback with 2-second stop safeguard
+            audioSource.Stop();
+            audioSource.time = 0f;
+            audioSource.clip = clipToPlay;
+            audioSource.Play();
+            CancelInvoke(nameof(StopCoinSound));
+            Invoke(nameof(StopCoinSound), coinSoundDuration);
+        }
+    }
+
+    private void StopCoinSound()
+    {
+        if (audioSource != null && audioSource.isPlaying)
+            audioSource.Stop();
     }
 
     public void LoseLife()
@@ -99,40 +203,51 @@ public class playerscript : MonoBehaviour
             RemoveTailSegment();
             rb.position = startingPosition;
             transform.position = startingPosition;
+            movementDirection = Vector3.forward;
+            rb.rotation = Quaternion.identity;
         }
     }
 
     void Update()
     {
-        horizontalInput = 0f;
-        verticalInput = 0f;
         invulnerabilityRemaining = Mathf.Max(0f, invulnerabilityRemaining - Time.deltaTime);
 
-        if (Keyboard.current == null)
-            return;
+        Vector3 newDir = Vector3.zero;
 
-        if (Keyboard.current.aKey.isPressed ||
-            Keyboard.current.leftArrowKey.isPressed)
+        if (Keyboard.current != null)
         {
-            horizontalInput = -1f;
+            if (Keyboard.current.aKey.wasPressedThisFrame ||
+                Keyboard.current.leftArrowKey.wasPressedThisFrame)
+                newDir = Vector3.left;
+            else if (Keyboard.current.dKey.wasPressedThisFrame ||
+                     Keyboard.current.rightArrowKey.wasPressedThisFrame)
+                newDir = Vector3.right;
+            else if (Keyboard.current.wKey.wasPressedThisFrame ||
+                     Keyboard.current.upArrowKey.wasPressedThisFrame)
+                newDir = Vector3.forward;
+            else if (Keyboard.current.sKey.wasPressedThisFrame ||
+                     Keyboard.current.downArrowKey.wasPressedThisFrame)
+                newDir = Vector3.back;
+        }
+        else
+        {
+            if (Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow))
+                newDir = Vector3.left;
+            else if (Input.GetKeyDown(KeyCode.D) || Input.GetKeyDown(KeyCode.RightArrow))
+                newDir = Vector3.right;
+            else if (Input.GetKeyDown(KeyCode.W) || Input.GetKeyDown(KeyCode.UpArrow))
+                newDir = Vector3.forward;
+            else if (Input.GetKeyDown(KeyCode.S) || Input.GetKeyDown(KeyCode.DownArrow))
+                newDir = Vector3.back;
         }
 
-        if (Keyboard.current.dKey.isPressed ||
-            Keyboard.current.rightArrowKey.isPressed)
+        if (newDir != Vector3.zero)
         {
-            horizontalInput = 1f;
-        }
-
-        if (Keyboard.current.wKey.isPressed ||
-            Keyboard.current.upArrowKey.isPressed)
-        {
-            verticalInput = 1f;
-        }
-
-        if (Keyboard.current.sKey.isPressed ||
-            Keyboard.current.downArrowKey.isPressed)
-        {
-            verticalInput = -1f;
+            // Prevent immediate 180-degree turn into tail if segments exist
+            if (bodySegments.Count == 0 || Vector3.Dot(newDir, movementDirection) > -0.8f)
+            {
+                movementDirection = newDir;
+            }
         }
 
         UpdateThirdPersonCamera();
@@ -143,15 +258,46 @@ public class playerscript : MonoBehaviour
         if (gameOver)
             return;
 
-        Vector3 nextPosition = rb.position +
-            new Vector3(
-                horizontalInput * speed * Time.fixedDeltaTime,
-                0f,
-                verticalInput * speed * Time.fixedDeltaTime);
+        Quaternion targetRotation = Quaternion.LookRotation(movementDirection, Vector3.up);
+        Quaternion smoothRotation = Quaternion.RotateTowards(
+            rb.rotation,
+            targetRotation,
+            turnSpeed * Time.fixedDeltaTime);
+        rb.MoveRotation(smoothRotation);
 
-        nextPosition.x = Mathf.Clamp(nextPosition.x, minX, maxX);
-        nextPosition.z = Mathf.Clamp(nextPosition.z, minZ, maxZ);
+        Vector3 nextPosition = rb.position +
+            movementDirection * speed * Time.fixedDeltaTime;
+
+        Vector3 wrapOffset = Vector3.zero;
+        float width = maxX - minX;
+        float depth = maxZ - minZ;
+        if (width > 0f)
+        {
+            if (nextPosition.x > maxX)
+                wrapOffset.x = -width;
+            else if (nextPosition.x < minX)
+                wrapOffset.x = width;
+        }
+
+        if (depth > 0f)
+        {
+            if (nextPosition.z > maxZ)
+                wrapOffset.z = -depth;
+            else if (nextPosition.z < minZ)
+                wrapOffset.z = depth;
+        }
+
+        nextPosition += wrapOffset;
         nextPosition.y = 0.5f;
+
+        if (wrapOffset != Vector3.zero)
+        {
+            for (int i = 0; i < bodySegments.Count; i++)
+            {
+                if (bodySegments[i] != null)
+                    bodySegments[i].position += wrapOffset;
+            }
+        }
 
         rb.MovePosition(nextPosition);
         FollowPrevious(nextPosition);
@@ -225,6 +371,18 @@ public class playerscript : MonoBehaviour
 
             segmentPosition.y = 0.5f;
             segment.position = segmentPosition;
+
+            direction = target - segmentPosition;
+            direction.y = 0f;
+            if (direction.sqrMagnitude > 0.001f)
+            {
+                Quaternion targetRotation = Quaternion.LookRotation(direction, Vector3.up);
+                segment.rotation = Quaternion.Slerp(
+                    segment.rotation,
+                    targetRotation,
+                    1f - Mathf.Exp(-segmentTurnSpeed * Time.fixedDeltaTime));
+            }
+
             previousPosition = segmentPosition;
         }
     }

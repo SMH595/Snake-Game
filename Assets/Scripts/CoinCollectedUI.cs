@@ -43,7 +43,7 @@ public class CoinCollectedUI : MonoBehaviour
     private void UpdateScoreText()
     {
         if (scoreText != null)
-            scoreText.text = $"Coins: {score}  |  Lives: {lives}  |  Length: {length}";
+            scoreText.text = $"Apples: {score}  |  Lives: {lives}  |  Length: {length}";
     }
 
     public void SetLives(int remainingLives)

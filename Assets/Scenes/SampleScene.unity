@@ -682,6 +682,8 @@ MonoBehaviour:
   cameraOffset: {x: 0, y: 8, z: -10}
   cameraLookOffset: {x: 0, y: 0, z: 2}
   coinCollectedUI: {fileID: 0}
+  coinSound: {fileID: 8300000, guid: c04ed4a32f87d634388b161c39ed4b11, type: 3}
+  coinSoundDuration: 2
 --- !u!1 &1232454199
 GameObject:
   m_ObjectHideFlags: 0
@@ -1113,13 +1115,16 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Spawner
   coin: {fileID: 975309150393032480, guid: 47058d169f0d01d41bf617b7f7ba142f, type: 3}
   hazard: {fileID: 7650650190307218939, guid: 9b10d2a58f757ea42b23ec492489b513, type: 3}
-  spawnInterval: 3
-  objectLifetime: 2.5
+  maxCoins: 1
+  gridY: 0.5
   minX: -9
   maxX: 9
   minZ: -9
   maxZ: 9
-  spawnHeight: 5
+  spawnHazards: 1
+  hazardInterval: 6
+  hazardLifetime: 5
+  hazardSpawnHeight: 6
 --- !u!4 &2015435995
 Transform:
   m_ObjectHideFlags: 0
